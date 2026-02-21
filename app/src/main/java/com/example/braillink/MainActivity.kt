@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
 
 // Compose basics
 import androidx.compose.runtime.*
@@ -35,6 +36,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.material.Button
+import androidx.compose.material.Text
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.LaunchedEffect
+
 class MainActivity : ComponentActivity() {
 
     private val btClient = BluetoothClient()
@@ -61,26 +74,75 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                1
+            )
+        }
+
         setContent {
             BraillinkControlScreen(btClient)
         }
     }
+
 }
 
 @Composable
 fun BraillinkControlScreen(btClient: BluetoothClient) {
+
+    val latestNotification by NotificationRepository.latestMessage.collectAsState()
+
     var status by remember { mutableStateOf("Idle") }
     val logs = remember { mutableStateListOf<String>() }
-    var lastSent by remember { mutableStateOf<String>("") }
+    var lastSent by remember { mutableStateOf("") }
 
     val scope = rememberCoroutineScope()
     var sendJob by remember { mutableStateOf<Job?>(null) }
+    var lastProcessedNotification by remember { mutableStateOf("") }
 
     fun appendLog(s: String) {
         pushLog(logs, s)
     }
 
-    val charDelayMs = 300L
+    fun sendTextToEsp(text: String) {
+
+        if (!btClient.isConnected()) {
+            appendLog("⚠ Bluetooth not connected")
+            return
+        }
+
+        sendJob?.cancel()
+
+        sendJob = scope.launch {
+            status = "Sending..."
+            for (ch in text) {
+
+                appendLog("Sending '$ch'")
+
+                btClient.send(ch.toString())
+                lastSent = ch.toString()
+                delay(300)
+            }
+            status = "Idle"
+        }
+    }
+
+    // 🔔 Handle Notifications (ONLY ONCE PER NEW MESSAGE)
+    LaunchedEffect(latestNotification) {
+        if (latestNotification.isNotBlank() &&
+            latestNotification != lastProcessedNotification) {
+
+            lastProcessedNotification = latestNotification
+            appendLog("Notification: $latestNotification")
+            sendTextToEsp(latestNotification)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -88,7 +150,6 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
             .padding(16.dp)
     ) {
 
-        // Connect Button
         Button(
             onClick = {
                 appendLog("Attempting Bluetooth connect...")
@@ -97,7 +158,7 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
                     deviceName = "BrailleLink_ESP32",
                     onSuccess = {
                         status = "Connected"
-                        appendLog("Connected to BrailleLink_ESP32")
+                        appendLog("Connected")
                     },
                     onError = {
                         status = "Error"
@@ -115,55 +176,37 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Status
-        Text(text = "Status: $status", fontSize = 16.sp)
+        Text("Status: $status", fontSize = 16.sp)
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Capture and Stop buttons
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+
             Button(
                 onClick = {
                     if (status != "Connected") {
-                        appendLog("Error: Not connected over Bluetooth")
+                        appendLog("Not connected")
                         return@Button
                     }
-                    if (sendJob != null) {
-                        appendLog("Already sending — press STOP to cancel")
-                        return@Button
-                    }
-                    status = "Capturing..."
+
                     appendLog("Capture pressed")
 
-                    sendJob = scope.launch {
-                        status = "Sending..."
-                        val textToSend = ScreenTextAccessibilityService.getLatestText()
-                        if (textToSend.isBlank()) {
-                            appendLog("No text found on screen.")
-                            status = "Idle"
-                            sendJob = null
-                            return@launch
-                        }
-                        appendLog("Captured: \"$textToSend\"")
+                    val textToSend = ScreenTextAccessibilityService.getLatestText()
 
-                        for (ch in textToSend) {
-                            if (!isActive) break
-                            val s = ch.toString()
-                            appendLog("Sending '$s'")
-                            btClient.send(s)
-                            lastSent = s
-                            delay(charDelayMs)
-                        }
-
-                        appendLog("Finished sending")
-                        status = "Idle"
-                        sendJob = null
+                    if (textToSend.isBlank()) {
+                        appendLog("No text found on screen")
+                        return@Button
                     }
+
+                    appendLog("Captured: $textToSend")
+                    sendTextToEsp(textToSend)
                 },
-                modifier = Modifier.weight(1f).height(60.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(60.dp),
                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32))
             ) {
                 Text("CAPTURE", color = Color.White, fontSize = 18.sp)
@@ -175,9 +218,10 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
                     sendJob?.cancel()
                     sendJob = null
                     status = "Stopped"
-                    lastSent = ""
                 },
-                modifier = Modifier.weight(1f).height(60.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(60.dp),
                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFC62828))
             ) {
                 Text("STOP", color = Color.White, fontSize = 18.sp)
@@ -186,7 +230,7 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Text("Last sent: ${if (lastSent.isEmpty()) "—" else lastSent}", fontSize = 14.sp)
+        Text("Last sent: ${if (lastSent.isEmpty()) "—" else lastSent}")
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -196,7 +240,7 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .background(color = Color(0xFFF5F5F5))
+                .background(Color(0xFFF5F5F5))
                 .padding(8.dp)
         ) {
             if (logs.isEmpty()) {
@@ -204,14 +248,13 @@ fun BraillinkControlScreen(btClient: BluetoothClient) {
             } else {
                 LazyColumn {
                     items(logs) { item ->
-                        Text(item, fontSize = 14.sp, modifier = Modifier.padding(vertical = 6.dp))
+                        Text(item, modifier = Modifier.padding(vertical = 6.dp))
                     }
                 }
             }
         }
     }
 }
-
 fun pushLog(logs: MutableList<String>, s: String) {
     val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val time = sdf.format(Date())

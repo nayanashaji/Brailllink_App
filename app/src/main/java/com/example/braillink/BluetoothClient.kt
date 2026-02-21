@@ -14,6 +14,8 @@ class BluetoothClient {
     private val SPP_UUID: UUID =
         UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
+    private var isConnected = false
+
     fun connect(
         deviceName: String,
         onSuccess: () -> Unit,
@@ -33,6 +35,7 @@ class BluetoothClient {
                 socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
                 adapter?.cancelDiscovery()
                 socket?.connect()
+                isConnected = true
                 onSuccess()
             } catch (e: IOException) {
                 onError("Connection failed: ${e.message}")
@@ -49,6 +52,11 @@ class BluetoothClient {
     }
 
     fun close() {
-        try { socket?.close() } catch (_: IOException) {}
+        try { socket?.close()
+            isConnected = false } catch (_: IOException) {}
+    }
+
+    fun isConnected(): Boolean {
+        return isConnected
     }
 }
