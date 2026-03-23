@@ -1,4 +1,7 @@
 # Brailllink
+
+![Braillink](braillink_pic.png)
+
 Braillink is an assistive technology system designed to improve smartphone accessibility for individuals who are blind, as well as those who are both blind and deaf.
 
 It works by converting digital text into tactile Braille patterns using a hardware module attached to the back of a smartphone. This enables users to access and understand phone content through touch, rather than relying on visual or auditory feedback.
